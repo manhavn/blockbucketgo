@@ -58,3 +58,71 @@ func main() {
 	_ = os.RemoveAll("data.db")
 }
 ```
+
+# DEMO queue app
+
+```go
+package main
+
+import (
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/manhavn/blockbucketgo"
+)
+
+func main() {
+	go func() {
+		for {
+			addQueue()
+			time.Sleep(time.Second * 20)
+		}
+	}()
+
+	for {
+		runQueue()
+		time.Sleep(time.Second * 2)
+	}
+}
+
+func addQueue() {
+	bucket := blockbucketgo.New("data.db")
+	defer bucket.Close()
+
+	timeNow := time.Now()
+	var listData []blockbucketgo.Item
+	for i := 0; i < 10; i++ {
+		testItemKey := []byte(fmt.Sprintf("test-key-%d-%s", i, timeNow.Format(time.RFC3339)))
+		testItemValue := []byte(fmt.Sprintf("test-data-%d-%s", i, timeNow.Format(time.RFC3339)))
+		listData = append(listData, blockbucketgo.Item{Key: testItemKey, Data: testItemValue})
+	}
+	count := bucket.SetMany(listData)
+
+	info, _ := os.Stat("data.db")
+	fmt.Printf("Queue added %d, Bucket file size %d bytes\n", count, info.Size())
+}
+
+func runQueue() {
+	bucket := blockbucketgo.New("data.db")
+	defer bucket.Close()
+
+	var limit uint8 = 3
+	listBlock := bucket.List(limit)
+
+	var endKey []byte
+	for i := 0; i < len(listBlock); i++ {
+		item := listBlock[i]
+		key := item.Key
+		value := item.Data
+		endKey = key
+
+		fmt.Println(string(endKey), " ==> ", string(value))
+		time.Sleep(time.Second / 2)
+	}
+	_ = bucket.DeleteTo(endKey, true)
+
+	info, _ := os.Stat("data.db")
+	fmt.Printf("Bucket file size %d bytes\n", info.Size())
+}
+```
