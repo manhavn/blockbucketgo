@@ -52,8 +52,15 @@ func main() {
 	err = bucket.DeleteTo(testKey, alsoDeleteTheFoundBlock)
 	fmt.Println("bucket.DeleteTo ", err == nil)
 
+	limit = 3
+	listBlock = bucket.ListLockDelete(limit)
+	fmt.Println("bucket.ListLockDelete ", listBlock)
+
 	data, err := os.ReadFile("data.db")
-	fmt.Println("os.ReadFile ", data, err)
+	if err != nil {
+		return
+	}
+	fmt.Println("os.ReadFile ", data)
 
 	_ = os.RemoveAll("data.db")
 }
@@ -99,7 +106,10 @@ func addQueue() {
 	}
 	count := bucket.SetMany(listData)
 
-	info, _ := os.Stat("data.db")
+	info, err := os.Stat("data.db")
+	if err != nil {
+		return
+	}
 	fmt.Printf("Queue added %d, Bucket file size %d bytes\n", count, info.Size())
 }
 
@@ -108,21 +118,25 @@ func runQueue() {
 	defer bucket.Close()
 
 	var limit uint8 = 3
-	listBlock := bucket.List(limit)
+	// listBlock := bucket.List(limit)
+	listBlock := bucket.ListLockDelete(limit)
 
-	var endKey []byte
+	// var endKey []byte
 	for i := 0; i < len(listBlock); i++ {
 		item := listBlock[i]
 		key := item.Key
 		value := item.Data
-		endKey = key
+		// endKey = key
 
-		fmt.Println(string(endKey), " ==> ", string(value))
+		fmt.Println(string(key), " ==> ", string(value))
 		time.Sleep(time.Second / 2)
 	}
-	_ = bucket.DeleteTo(endKey, true)
+	// _ = bucket.DeleteTo(endKey, true)
 
-	info, _ := os.Stat("data.db")
+	info, err := os.Stat("data.db")
+	if err != nil {
+		return
+	}
 	fmt.Printf("Bucket file size %d bytes\n", info.Size())
 }
 ```

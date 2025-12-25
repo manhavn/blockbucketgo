@@ -78,7 +78,8 @@ func New(path string) *Bucket {
 }
 
 func (e *Bucket) digitsToNumber(digits []byte) (n uint) {
-	for _, x := range digits {
+	for i := 0; i < len(digits); i++ {
+		x := digits[i]
 		var count int
 		if x < 10 {
 			count = 1
@@ -115,7 +116,8 @@ func (e *Bucket) getListConfig() (uint, []byte) {
 	var sizeListData []byte
 	func() {
 		var positionListCheck uint8
-		for _, v := range buffer {
+		for i := 0; i < len(buffer); i++ {
+			v := buffer[i]
 			if v == cEnd {
 				positionListCheck += 1
 				continue
@@ -208,7 +210,8 @@ func (e *Bucket) getNewListNotContainKey(
 
 	blockInfo := emptyBlock
 	var tmpGroup []byte
-	for _, v := range listBlockData {
+	for i := 0; i < len(listBlockData); i++ {
+		v := listBlockData[i]
 		switch v {
 		case cStart:
 			blockInfo.start = e.digitsToNumber(tmpGroup)
@@ -431,7 +434,8 @@ func (e *Bucket) getOneData(listBlockData []byte, key []byte) (rsKey []byte, rsD
 	}
 	blockInfo := emptyBlock
 	var tmpGroup []byte
-	for _, v := range listBlockData {
+	for i := 0; i < len(listBlockData); i++ {
+		v := listBlockData[i]
 		switch v {
 		case cStart:
 			blockInfo.start = e.digitsToNumber(tmpGroup)
@@ -667,7 +671,8 @@ func (e *Bucket) getNewListNotContainListKey(
 	listSkipCheck := map[string]bool{}
 	blockInfo := emptyBlock
 	var tmpGroup []byte
-	for _, v := range listBlockData {
+	for i := 0; i < len(listBlockData); i++ {
+		v := listBlockData[i]
 		switch v {
 		case cStart:
 			blockInfo.start = e.digitsToNumber(tmpGroup)
@@ -1073,4 +1078,86 @@ func (e *Bucket) deleteToData(
 		)
 	}
 	return err
+}
+
+func (e *Bucket) ListLockDelete(limit uint8) []Item {
+	_ = syscall.Flock(int(e.fd), syscall.LOCK_EX)
+	defer syscall.Flock(int(e.fd), syscall.LOCK_UN)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	startListPoint, listBlockData := e.getListConfig()
+	return e.getListLockDeleteData(startListPoint, listBlockData, limit)
+}
+
+func (e *Bucket) getListLockDeleteData(
+	startListPoint uint,
+	listBlockData []byte,
+	limit uint8,
+) []Item {
+	var result []Item
+	blockInfo := emptyBlock
+	var tmpGroup []byte
+	var current uint8 = 0
+	var endKey []byte
+	for i := 0; i < len(listBlockData); i++ {
+		if current >= limit {
+			break
+		}
+		v := listBlockData[i]
+		switch v {
+		case cStart:
+			blockInfo.start = e.digitsToNumber(tmpGroup)
+			tmpGroup = []byte{}
+		case cSizeKey:
+			blockInfo.sizeKey = e.digitsToNumber(tmpGroup)
+			tmpGroup = []byte{}
+		case cSumKey:
+			blockInfo.sumKey = e.digitsToNumber(tmpGroup)
+			tmpGroup = []byte{}
+		case cSumMd5:
+			blockInfo.sumMd5 = e.digitsToNumber(tmpGroup)
+			tmpGroup = []byte{}
+		case cSizeData:
+			blockInfo.sizeData = e.digitsToNumber(tmpGroup)
+			tmpGroup = []byte{}
+
+			foundKey, foundData := e.pullData(blockInfo)
+			sizeFoundKey := uint(len(foundKey))
+			if sizeFoundKey == blockInfo.sizeKey {
+				var sumFoundKey uint
+				for i := 0; i < len(foundKey); i++ {
+					sumFoundKey += uint(foundKey[i])
+				}
+
+				if sumFoundKey == blockInfo.sumKey {
+					var sumFoundMd5 uint
+					keyMd5 := e.md5(foundKey)
+					for i := 0; i < len(keyMd5); i++ {
+						sumFoundMd5 += uint(keyMd5[i])
+					}
+					if sumFoundMd5 == blockInfo.sumMd5 {
+						// success
+						endKey = foundKey
+						result = append(result, Item{
+							Key:  foundKey,
+							Data: foundData,
+						})
+						current += 1
+					}
+				}
+			}
+
+			blockInfo = emptyBlock
+		case cEnd:
+			break
+		default:
+			tmpGroup = append(tmpGroup, v)
+		}
+	}
+	err := e.deleteToData(startListPoint, listBlockData, true, endKey)
+	if err != nil {
+		return nil
+	}
+	return result
 }
