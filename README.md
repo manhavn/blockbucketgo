@@ -1,4 +1,93 @@
-# SETUP
+# blockbucketgo
+
+A tiny embedded key/value store backed by a single file.
+
+`blockbucketgo` stores items as `(key []byte, data []byte)` in a file and provides simple operations:
+
+- Put / Get / Delete by key
+- Batch put
+- List / pagination
+- Find from a key
+- “Queue style” consume via `ListLockDelete`
+
+> Package docs: https://pkg.go.dev/github.com/manhavn/blockbucketgo
+
+## Install
+
+```bash
+go get github.com/manhavn/blockbucketgo
+```
+
+## Quick start
+
+```go
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/manhavn/blockbucketgo"
+)
+
+func main() {
+	b := blockbucketgo.New("data.db")
+	defer b.Close()
+
+	key := []byte("test-key-001-99999999999999")
+	val := []byte("test data value: 0123456789 abcdefgh")
+
+	n, err := b.Set(blockbucketgo.Item{Key: key, Data: val})
+	fmt.Println("Set:", n, err)
+
+	k2, v2 := b.Get(key)
+	fmt.Println("Get:", string(k2), "==>", string(v2))
+
+	n, err = b.Delete(key)
+	fmt.Println("Delete:", n, err == nil)
+
+	_ = os.Remove("data.db")
+}
+```
+
+## Batch insert
+
+```go
+items := []blockbucketgo.Item{{Key: []byte("k1"), Data: []byte("v1")},{Key: []byte("k2"), Data: []byte("v2")}}
+count := b.SetMany(items)
+fmt.Println("inserted:", count)
+```
+
+## Listing and pagination
+
+```go
+limit := uint8(10)
+
+first := b.List(limit) // first page
+next := b.ListNext(limit, 10) // skip N items
+more := b.FindNext([]byte("k2"), limit, true) // from key (optionally after key)
+```
+
+## Queue-style consume (ListLockDelete)
+
+`ListLockDelete(limit)` is intended for “consume-and-delete” workloads.
+A typical pattern:
+
+1. Producers push items with `SetMany` (or `Set`)
+2. Consumers periodically call `ListLockDelete(limit)` to take a small batch
+
+```go
+limit := uint8(3)
+batch := b.ListLockDelete(limit)
+for _, it := range batch { fmt.Println(string(it.Key), "=>", string(it.Data)) }
+```
+
+## Notes
+
+- Keys and values are `[]byte`. You control encoding (string/JSON/msgpack/...).
+- Always call `Close()` to flush and release file handles.
+
+## DEMO
 
 ```go
 package main

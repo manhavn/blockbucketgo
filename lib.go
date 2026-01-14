@@ -1,3 +1,19 @@
+// Package blockbucketgo provides a tiny embedded key/value store backed by a single file.
+//
+// The store works with raw bytes:
+//   - Keys are []byte
+//   - Values (data) are []byte
+//
+// Typical usage:
+//
+//	b := blockbucketgo.New("data.db")
+//	defer b.Close()
+//
+//	_, _ = b.Set(blockbucketgo.Item{Key: []byte("k"), Data: []byte("v")})
+//	k, v := b.Get([]byte("k"))
+//
+// The package also supports batch insertion, simple listing/pagination,
+// and a queue-like consume pattern via ListLockDelete.
 package blockbucketgo
 
 import (
@@ -24,6 +40,10 @@ const (
 	cFirstSize     uint  = 128
 )
 
+// Bucket represents an opened on-disk store.
+//
+// A Bucket is backed by a file path provided to New.
+// Always call Close when done.
 type Bucket struct {
 	reader *os.File
 	writer *os.File
@@ -31,8 +51,11 @@ type Bucket struct {
 	mu     sync.Mutex
 }
 
+// Item is a single key/value entry stored in the bucket.
 type Item struct {
-	Key  []byte
+	// Key is the lookup key (arbitrary bytes).
+	Key []byte
+	// Data is the payload/value (arbitrary bytes).
 	Data []byte
 }
 
@@ -52,6 +75,10 @@ var emptyBlock = block{
 	sizeData: 0,
 }
 
+// Close flushes and closes any underlying file handles.
+//
+// It is safe to call Close multiple times only if your implementation supports it
+// (otherwise document the behavior here).
 func (e *Bucket) Close() {
 	if e.reader != nil {
 		_ = e.reader.Close()
@@ -61,6 +88,14 @@ func (e *Bucket) Close() {
 	}
 }
 
+// New opens (or creates) a bucket at the given file path.
+//
+// The returned Bucket keeps file handles open until Close is called.
+//
+// Example:
+//
+//	b := blockbucketgo.New("data.db")
+//	defer b.Close()
 func New(path string) *Bucket {
 	e := Bucket{}
 	reader, err := os.OpenFile(path, os.O_CREATE|os.O_RDONLY, 0o644)
@@ -93,6 +128,10 @@ func (e *Bucket) digitsToNumber(digits []byte) (n uint) {
 	return
 }
 
+// Set writes or updates a single item.
+//
+// It returns n (implementation-defined; commonly bytes written or affected records)
+// and a non-nil error on failure.
 func (e *Bucket) Set(item Item) (int, error) {
 	_ = syscall.Flock(int(e.fd), syscall.LOCK_EX)
 	defer syscall.Flock(int(e.fd), syscall.LOCK_UN)
@@ -416,6 +455,10 @@ func (e *Bucket) updateListBlock(start uint, listBlockData []byte) (n int, err e
 	return n, err
 }
 
+// Get returns the stored key and value for the provided key.
+//
+// If the key does not exist, implementations typically return nil, nil (or empty slices).
+// Document the exact “not found” behavior here if it differs.
 func (e *Bucket) Get(key []byte) ([]byte, []byte) {
 	_, listBlockData := e.getListConfig()
 	return e.getOneData(listBlockData, key)
@@ -485,6 +528,10 @@ func (e *Bucket) pullData(info block) ([]byte, []byte) {
 	return foundKey, foundData
 }
 
+// Delete removes an item by key.
+//
+// It returns n (implementation-defined; commonly bytes removed or affected records)
+// and a non-nil error on failure.
 func (e *Bucket) Delete(key []byte) (int, error) {
 	_ = syscall.Flock(int(e.fd), syscall.LOCK_EX)
 	defer syscall.Flock(int(e.fd), syscall.LOCK_UN)
@@ -504,6 +551,9 @@ func (e *Bucket) deleteOneData(listBlockData []byte, key []byte, startListPoint 
 	return e.updateListBlock(startListPoint, newListBlockData)
 }
 
+// SetMany writes multiple items.
+//
+// The return value is the number of successfully written items.
 func (e *Bucket) SetMany(listData []Item) int {
 	_ = syscall.Flock(int(e.fd), syscall.LOCK_EX)
 	defer syscall.Flock(int(e.fd), syscall.LOCK_UN)
@@ -738,6 +788,7 @@ func (e *Bucket) getNewListNotContainListKey(
 	return nil, nil
 }
 
+// List returns up to limit items from the beginning of the bucket (oldest-first by storage order).
 func (e *Bucket) List(limit uint8) []Item {
 	_, listBlockData := e.getListConfig()
 	return e.getListData(listBlockData, limit)
@@ -815,6 +866,7 @@ func (e *Bucket) addToMapSort(mapBlockInsert *map[string]block, c block, startBl
 	}
 }
 
+// ListNext returns up to limit items after skipping skip items.
 func (e *Bucket) ListNext(limit uint8, skip uint) []Item {
 	_, listBlockData := e.getListConfig()
 	return e.getListNextData(listBlockData, limit, skip)
@@ -887,6 +939,10 @@ func (e *Bucket) getListNextData(listBlockData []byte, limit uint8, skip uint) [
 	return result
 }
 
+// FindNext returns up to limit items starting from key.
+//
+// If onlyAfterKey is true, results begin strictly after the provided key.
+// If onlyAfterKey is false, results may include the provided key if it exists.
 func (e *Bucket) FindNext(key []byte, limit uint8, onlyAfterKey bool) []Item {
 	_, listBlockData := e.getListConfig()
 	return e.getFindNextData(
@@ -984,6 +1040,10 @@ func (e *Bucket) getFindNextData(
 	return result
 }
 
+// DeleteTo deletes items from the start of the bucket up to key.
+//
+// If alsoDeleteTheFoundBlock is true, the block/item matching key is also deleted.
+// If false, deletion stops before the block/item that matches key.
 func (e *Bucket) DeleteTo(key []byte, alsoDeleteTheFoundBlock bool) error {
 	_ = syscall.Flock(int(e.fd), syscall.LOCK_EX)
 	defer syscall.Flock(int(e.fd), syscall.LOCK_UN)
@@ -1080,6 +1140,11 @@ func (e *Bucket) deleteToData(
 	return err
 }
 
+// ListLockDelete returns up to limit items and deletes them as part of the operation.
+//
+// This method is intended for queue/worker patterns (consume-and-delete).
+// Implementations may lock the underlying file to prevent concurrent consumers
+// from reading the same batch.
 func (e *Bucket) ListLockDelete(limit uint8) []Item {
 	_ = syscall.Flock(int(e.fd), syscall.LOCK_EX)
 	defer syscall.Flock(int(e.fd), syscall.LOCK_UN)
