@@ -53,7 +53,7 @@ func main() {
 ## Batch insert
 
 ```go
-items := []blockbucketgo.Item{{Key: []byte("k1"), Data: []byte("v1")},{Key: []byte("k2"), Data: []byte("v2")}}
+items := []blockbucketgo.Item{ {Key: []byte("k1"), Data: []byte("v1")}, {Key: []byte("k2"), Data: []byte("v2")} }
 count := b.SetMany(items)
 fmt.Println("inserted:", count)
 ```
